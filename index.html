@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Marathon Heart Rate Tattoo Designer (Vertical)</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body { font-family: sans-serif; padding: 20px; background: #f0f0f0; }
+        .container { display: flex; flex-direction: column; gap: 20px; }
+        .controls {
+            background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;
+            position: sticky; top: 0; z-index: 100;
+        }
+        .control-group { display: flex; flex-direction: column; }
+        label { font-weight: bold; margin-bottom: 5px; font-size: 0.9em; }
+        input[type="range"] { width: 100%; }
+        #chart-container {
+            background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            text-align: center;
+            min-height: 500px;
+        }
+        .value-display { float: right; font-weight: normal; color: #666; }
+    </style>
+</head>
+<body>
+
+<h1>Tattoo Graph Designer (Vertical)</h1>
+<p>Adjust the sliders to customize your vertical marathon heart rate graph. The graph runs from bottom (Start) to top (Finish).</p>
+
+<div class="container">
+    <div class="controls">
+        <div class="control-group">
+            <label>Total Length (Vertical) <span id="val-width" class="value-display">5000px</span></label>
+            <input type="range" id="width" min="500" max="5000" value="5000">
+        </div>
+        <div class="control-group">
+            <label>Graph Width (Amplitude) <span id="val-height" class="value-display">100px</span></label>
+            <input type="range" id="height" min="100" max="600" value="100">
+        </div>
+        <div class="control-group">
+            <label>Line Thickness <span id="val-stroke" class="value-display">2px</span></label>
+            <input type="range" id="stroke" min="0.5" max="10" step="0.5" value="2">
+        </div>
+        <div class="control-group">
+            <label>Smoothing (Moving Average) <span id="val-smooth" class="value-display">3 pts</span></label>
+            <input type="range" id="smooth" min="1" max="50" value="3">
+        </div>
+        <div class="control-group">
+            <label>Clamp Low BPM (Cutoff) <span id="val-clamp-low" class="value-display">110</span></label>
+            <input type="range" id="clamp-low" min="0" max="150" value="110">
+        </div>
+    </div>
+
+    <div id="chart-container"></div>
+    <button onclick="downloadSVG()" style="padding: 15px; font-size: 1.1em; cursor: pointer;">Download SVG for Tattoo Artist</button>
+</div>
+
+<script>
+    // Note: 'width' param controls Vertical Length (Height in SVG)
+    //       'height' param controls Horizontal Width/Amplitude (Width in SVG)
+    let params = {
+        width: 5000,
+        height: 100,
+        stroke: 2,
+        smooth: 3,
+        clampLow: 110
+    };
+
+    const container = d3.select("#chart-container");
+
+    function update(data) {
+        container.html("");
+
+        const margin = {top: 20, right: 20, bottom: 20, left: 20};
+        const svgHeight = params.width;
+        const svgWidth = params.height;
+        const width = svgWidth - margin.left - margin.right;
+        const height = svgHeight - margin.top - margin.bottom;
+
+        const svg = container.append("svg")
+            .attr("style", "fill: none; stroke-linecap: round; stroke-linejoin: round;")
+            .attr("width", svgWidth)
+            .attr("height", svgHeight)
+            .attr("id", "tattoo-graph")
+            .append("g")
+            .attr("transform", `translate(${margin.left},${margin.top})`);
+
+        // Smoothing
+        let processedData = [];
+        if (params.smooth > 1) {
+            for (let i = 0; i < data.length; i++) {
+                let sum = 0, count = 0;
+                for (let j = Math.max(0, i - Math.floor(params.smooth / 2));
+                     j < Math.min(data.length, i + Math.floor(params.smooth / 2) + 1); j++) {
+                    sum += data[j].value;
+                    count++;
+                }
+                processedData.push({date: data[i].date, value: sum / count});
+            }
+        } else {
+            processedData = data;
+        }
+
+        // Y axis = Time (start at bottom, finish at top)
+        const y = d3.scaleTime()
+            .domain(d3.extent(processedData, d => d.date))
+            .range([height, 0]);
+
+        // X axis = BPM amplitude
+        const xExtent = d3.extent(processedData, d => d.value);
+        const x = d3.scaleLinear()
+            .domain([Math.max(params.clampLow, xExtent[0]), xExtent[1]])
+            .range([0, width]);
+
+        const line = d3.line()
+            .x(d => Math.max(0, Math.min(width, x(d.value))))
+            .y(d => y(d.date))
+            .curve(d3.curveMonotoneY);
+
+        svg.append("path")
+            .datum(processedData)
+            .attr("class", "line")
+            .attr("stroke", "black")
+            .attr("stroke-width", params.stroke)
+            .attr("d", line);
+    }
+
+    function setupListener(id, paramKey, data, isFloat = false) {
+        d3.select("#" + id).on("input", function () {
+            const val = isFloat ? parseFloat(this.value) : parseInt(this.value, 10);
+            params[paramKey] = val;
+            d3.select("#val-" + id).text(val + (id === 'width' || id === 'height' ? 'px' : ''));
+            update(data);
+        });
+    }
+
+    function downloadSVG() {
+        const svg = document.getElementById("tattoo-graph");
+        const serializer = new XMLSerializer();
+        const source = serializer.serializeToString(svg);
+        const blob = new Blob([source], {type: "image/svg+xml;charset=utf-8"});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "tattoo_design_vertical.svg";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
+
+    fetch('data.json')
+        .then(res => res.json())
+        .then(rawData => {
+            const data = rawData.map(d => ({
+                date: new Date(d['timestamp']),
+                value: +d['beats per minute']
+            }));
+            setupListener("width", "width", data);
+            setupListener("height", "height", data);
+            setupListener("stroke", "stroke", data, true);
+            setupListener("smooth", "smooth", data);
+            setupListener("clamp-low", "clampLow", data);
+            update(data);
+        });
+</script>
+</body>
+</html>
